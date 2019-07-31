@@ -1,16 +1,15 @@
 export MomObj, MomCon, MomCons
 # export NLMomObj
 
-abstract type AbstractMomentObjective end
-struct EmptyObjective <: AbstractMomentObjective end
-
-abstract type AbstractMomentConstraint end
-
+struct MomConShape <: JuMP.AbstractShape end
+Base.broadcastable(shape::MomConShape) = Ref(shape)
 
 """
-MomObj
+    MomObj
+
+Moment objective.
 """
-mutable struct MomObj{PT<:MT} <:AbstractMomentObjective
+mutable struct MomObj{PT<:MT}
 	sense::MOI.OptimizationSense
 	obj::MomExpr{PT}
 end
@@ -27,17 +26,16 @@ function MomObj(sense::MOI.OptimizationSense, meas::Measure, pol::PT) where PT<:
 	return MomObj(sense,Mom(pol,meas))
 end
 
-function Base.show(io::IO,f::MO) where MO<:AbstractMomentObjective
-    if typeof(f) == EmptyObjective
-        print(io,"Feasability problem:")
-    elseif f.sense == MOI.MAX_SENSE
+function Base.show(io::IO, f::MomObj)
+    if f.sense == MOI.MAX_SENSE
         print(io,"Maximize $(f.obj)")
     else
+        @assert f.sense == MOI.MIN_SENSE
         print(io,"Minimize $(f.obj)")
     end
 end
 
-function measures(f::MO) where MO<:AbstractMomentObjective
+function measures(f::MomObj)
 	return collect(keys(f.obj.momdict))
 end
 
@@ -50,93 +48,61 @@ NLMomObj
 """
 MomCon
 """
-mutable struct MomCon{PT<:MT,T<:Number} <:AbstractMomentConstraint
-	lhs::MomExpr{PT}
-	mode::Symbol
-	rhs::T
+mutable struct MomCon{PT<:MT} <: JuMP.AbstractConstraint
+	func::MomExpr{PT}
+    set::MOI.AbstractScalarSet
 end
 
-function MomCon(lhs::Mom{PT}, mode::Symbol, rhs::T) where {T<:Number, PT<:MT}
-	return MomCon{PT,T}(convert(MomExpr{PT},lhs),mode,rhs)
+function MomCon(func::AffMomExpr, set::MOI.AbstractScalarSet)
+    return MomCon(momexpr(func), MOI.Utilities.shift_constant(set, -constant(func)))
 end
 
-function MomCon(meas::Measure,pol::PT,mode::Symbol,rhs::T) where {T<:Number,PT<:MT}
-	return MomCon(Mom(meas,pol),mode,rhs)
+function MomCon(func::Mom, set::MOI.AbstractScalarSet)
+    return MomCon(MomExpr(func), set)
 end
 
-function  MomCon(pol::PT,meas::Measure,mode::Symbol,rhs::T) where {T<:Number,PT<:MT}
-	return MomCon(Mom(meas,pol),mode,rhs)
+function Base.convert(::Type{MomCon{PT1}},mc::MomCon) where {PT1<:MT}
+    return MomCon{PT1}(convert(MomExpr{PT1},mc.func),mc.set)
 end
 
-function Base.convert(::Type{MomCon{PT1,T1}},mc::MomCon) where {T1<:Number, PT1<:MT}
-	return MomCon{PT1,T1}(convert(MomExpr{PT1},mc.lhs),mc.mode,convert(T1,mc.rhs))
+function Base.promote_rule(::Type{MomCon{PT1}},::Type{MomCon{PT2}})  where {PT1<:MT, PT2<:MT}
+    return MomCon{promote_type{PT1,PT2}}
 end
 
+JuMP.jump_function(con::MomCon) = con.func
+JuMP.moi_set(con::MomCon) = con.set
+JuMP.shape(con::MomCon) = MomConShape()
+JuMP.reshape_vector(expr::MomExpr, ::MomConShape) = expr
+JuMP.reshape_set(set::MOI.AbstractScalarSet, ::MomConShape) = set
 
-function Base.promote_rule(::Type{MomCon{PT1,T1}},::Type{MomCon{PT2,T2}})  where {T1<:Number,T2<:Number, PT1<:MT, PT2<:MT}
-	return MomCon{promote_type{PT1,PT2},promote_type{T1,T2}}
+function Base.show(io::IO, mc::MomCon)
+    print(io, JuMP.constraint_string(JuMP.REPLMode, mc))
 end
 
-function Base.show(io::IO,mc::MC) where MC <: AbstractMomentConstraint
-	if mc.mode == :eq
-		print(io,"$(mc.lhs) = $(mc.rhs)")
-	elseif mc.mode ==:leq
-		print(io,"$(mc.lhs) ⩽  $(mc.rhs)")
-	elseif mc.mode ==:geq
-		print(io,"$(mc.lhs) ⩾ $(mc.rhs)")
-	end
+function JuMP.function_string(mode, mc::MomCon)
+    return string(mc.func)
 end
 
-"""
-MomCons
-"""
-
-function MomCons(lhs::M,mode::Symbol,rhs::T) where {M<:AbstractMomentExpressionLike, T<:Number}
-	return MomCon(lhs,mode,rhs)
+function measures(mc::MomCon)
+    return measures(mc.func)
 end
 
-function MomCons(lhs::Vector{M},mode::Vector{Symbol},rhs::Vector{T}) where {M<:AbstractMomentExpressionLike, T<:Number}
-	MT = promote_type([montype(l) for l in lhs]...)
-	mc = MomCon{MT,T}[]
-	for i in 1:length(rhs)
-		push!(mc,MomCon(lhs[i],mode[i],rhs[i]))
-	end
-	return mc
-end
-
-function MomCons(lhs::Vector{M},mode::Symbol,rhs::Vector{T}) where {M<:AbstractMomentExpressionLike, T<:Number}
-	MT = promote_type([montype(l) for l in lhs]...)
-	mc = MomCon{MT,T}[]
-	for i in 1:length(rhs)
-		append!(mc,[MomCon(lhs[i],mode,rhs[i])])
-	end
-	return mc
-end
-
-function MomCons(lhs::Vector{M},mode::Symbol,rhs::T) where {M<:AbstractMomentExpressionLike, T<:Number}
- 	MT = promote_type([montype(l) for l in lhs]...)
-	mc = MomCon{MT,T}[]
-	for i in 1:length(rhs)
-		append!(mc,[MomCon(lhs[i],mode,rhs)])
-	end
-	return mc
-end
-
-
-# pretty printing
-function Base.show(io::IO,momcons::Vector{M}) where M<:AbstractMomentConstraint
-	for i=1:length(momcons)
-		println(io, "$(momcons[i])")
-	end
-end
-
-function measures(mcv::Vector{M}) where M<:AbstractMomentConstraint
-	measv = Measure[]
+function measures(mcv::Vector{MomCon})
+    measv = Set{Measure}()
 	for mc in mcv
-		append!(measv,measures(mc.lhs))
+        union!(measv, measures(mc))
 	end
-	unique!(measv)
+    return measv
 end
-function measures(mcv::M) where M<:AbstractMomentConstraint
-	measures([mcv])
+
+function constant(mc::MomCon)
+    return constant(mc.set)
 end
+
+#TODO: remove when JuMP is version 0.20 
+Base.broadcastable(set::MOI.AbstractScalarSet) = Ref(set)
+constant(s::MOI.EqualTo) = s.value
+constant(s::MOI.LessThan) = s.upper
+constant(s::MOI.GreaterThan) = s.lower
+
+

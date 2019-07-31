@@ -37,8 +37,10 @@ using SumOfSquares
 using MomentOpt
 
 using MosekTools
+using Plots
 
-
+# Choose relaxation order
+order = 6 
 
 f(y) = 1/4*y^2
 T = [0,1]
@@ -47,9 +49,6 @@ Y = [0,1]
 
 # Define polynomial variables
 @polyvar t x y
-
-# Choose relaxation order
-order = 8 
 
 gmp = GMPModel()
 # Add measures
@@ -69,7 +68,7 @@ pons = polynomial.(mons)
 wpde = vec(differentiate(pons,[t]))*y + vec(differentiate(pons,[x]))*f(y) 
 
 # The fiels mons.Z provides the exponents of the monomials of mons (and pons)
-@mconstraints gmp MomCons( Mom.(pons*y,μT)+Mom.(pons*f(y),μR)-Mom.(wpde,μ),:eq, [rhs(mons.Z[i]...) for i = 1:length(mons.Z)])  
+@constraint gmp Mom.(pons*y,μT)+Mom.(pons*f(y),μR)-Mom.(wpde,μ) .== [rhs(mons.Z[i]...) for i = 1:length(mons.Z)] 
 
 # Right hand sides for the marginal constraints
 lebt(i) = (T[2]^(i+1)-T[1]^(i+1))/(i+1)
@@ -79,9 +78,9 @@ monstx = monomials([t,x],0:2*order)
 monsx= monomials(x,0:2*order)
 monst= monomials(t,0:2*order)
 
-@mconstraints gmp MomCons( Mom.(polynomial.(monstx),μ),:eq, [lebtx(monstx.Z[i]...) for i =1:length(monstx.Z)])
-@mconstraints gmp MomCons( Mom.(polynomial.(monsx),μT),:eq, [lebx(monsx.Z[i]...) for i =1:length(monsx.Z)])
-@mconstraints gmp MomCons( Mom.(polynomial.(monst),μR),:eq, [lebt(monst.Z[i]...) for i =1:length(monst.Z)])
+@constraint gmp Mom.(polynomial.(monstx),μ) .== [lebtx(monstx.Z[i]...) for i =1:length(monstx.Z)]
+@constraint gmp Mom.(polynomial.(monsx),μT) .== [lebx(monsx.Z[i]...) for i =1:length(monsx.Z)]
+@constraint gmp Mom.(polynomial.(monst),μR) .== [lebt(monst.Z[i]...) for i =1:length(monst.Z)]
 
 # The GMP formulation of the PDE does not have any objective function as the measures are uniquely determined by the
 # problem. However, when relaxing the problem the measures will not be unique anymore which is why we add an objective function.
@@ -96,8 +95,15 @@ trace = mmons'*mmons
 
 relax!(gmp,order,with_optimizer(Mosek.Optimizer))
 
-graph(gmp,μ)
+ch = christoffel(gmp, μ)
 
+T = range(0, stop = 1, length = 10)
+X = range(-1/2, stop = 1/2, length = 10)
+
+pyplot()
+f(tt,xx) = min_val(([t,x]=>[tt,xx]), ch)
+plot(T, X, f, st=:surface,camera=(-40,30))
+png("/mnt/c/Users/tillm/Desktop/talks/JuliaCon2019/burgers.png")
 
 
 

@@ -1,16 +1,15 @@
-
-using MomentOpt 
+using MomentOpt
 using Test
 using DynamicPolynomials
 using SemialgebraicSets
 using SumOfSquares
+using OrderedCollections
 
-
-@testset "MomentOpt Tests" begin
+using CSDP
 
 include("meas.jl")
 include("momexpr.jl")
 include("momcon.jl")
 include("macros.jl")
-
-end
+include("show.jl")
+include("relax.jl")

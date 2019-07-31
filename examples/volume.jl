@@ -36,10 +36,10 @@ using MomentOpt
 
 using MosekTools
 using Plots
-
+pyplot()
 
 # relaxation order for the Generalized Moment Problem
-order = 6
+order = 8 
 
 # polnomial variables
 @polyvar x y
@@ -65,20 +65,14 @@ leb_mom(i,j) = ((1-(-1)^(i+1))/(i+1))*((1-(-1)^(j+1))/(j+1))/4
 # DynamicPolynomials.jl provides the possibility to define a monomial vector.
 mons = monomials([x,y],0:2*order)
 # The monomial vector is not of a polynomial type, we need to convert it first.
-pons = convert(Vector{Polynomial{true,Int64}},mons)
-# The fiels mons.Z provides the exponents of the monomials of mons (and pons)
-cons = MomCons( Mom.(pons,μ)+Mom.(pons,ν),:eq,[leb_mom(mons.Z[i]...) for i = 1:length(mons.Z)])  
+pons = polynomial.(mons)
 
-# The constraints are added to the gmp model. Note that we gave a name to the constraints first 
+# The fiels mons.Z provides the exponents of the monomials of mons (and pons)
+exponents = mons.Z
+# The constraints are added to the gmp model. Note that we give a name to the constraints 
 # in order to be able to refer to them later on
 
-@mconstraints gmp cons
-
-#Note that we gave a name to the constraints in order to be able to refer to them later on.
-#we could have done 
-# @mconstraints gmp MomCons( Mom(pons,μ)+Mom(pons,ν),:eq,[leb_mom(mons.Z[i]...) for i = 1:length(mons.Z)])  
-# directly 
-
+@constraint gmp cons[i=1:length(exponents)] Mom(pons[i],μ)+Mom(pons[i],ν) == leb_mom(exponents[i]...) 
 
 # In order to relax the problem, we need to specify the relaxation order and a solver factory:
 relax!(gmp,order,with_optimizer(Mosek.Optimizer))
@@ -87,16 +81,12 @@ relax!(gmp,order,with_optimizer(Mosek.Optimizer))
 # The optimal value is an approximation to the volume of K (which is π in this case)
 println("Volume of approximation: $(objective_value(gmp)*4)")
 
-# We want to investigate the polynomial over approximation of the indicator function, which can be defined
+# The polynomial over approximation of the indicator function can be defined
 # from the dual solution as follows:
 poly = sum(dual_value(gmp,cons[i])*pons[i] for i=1:length(mons))
 
-
-# We plot the one super level set of poly and the set K in B
-ds = 0.01; xx = -1:ds:1; yy = -1:ds:1;
-f(xx,yy) = convert(Int,(convert(Float64,subs(poly, x=>xx,y=>yy))>=1))+convert(Int,xx^2+yy^2<=1)
-# f returns 0 if poly< 1 outside of K
-# f returns 1 if poly⩾ 1 outside of K
-# f returns 2 if poly⩾ 1 inside of K
-p1 = contourf(xx, yy, f, levels = 3, color=:Greys)
+# Plot 
+xx = yy = range(-1, stop = 1, length = 100)
+f(xx,yy) = poly(x=>xx,y=>yy)
+plot(xx, yy, f, st= :surface)
 

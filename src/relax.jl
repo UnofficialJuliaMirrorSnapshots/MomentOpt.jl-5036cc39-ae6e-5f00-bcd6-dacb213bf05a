@@ -35,64 +35,55 @@ function add_prod!(p::AbstractPolynomial{JuMP.AffExpr}, q::Number, args...)
     add_prod!(p, constantterm(q, p), args...)
 end
 
-
+function dual_variable(dual::JuMP.Model, momcon::MomCon, sense::MOI.OptimizationSense)
+    if momcon.set isa MOI.EqualTo
+        variable = @variable(dual)
+    elseif xor(momcon.set isa MOI.LessThan, sense == MOI.MIN_SENSE)
+        variable = @variable(dual, lower_bound=0)
+    else
+        variable = @variable(dual, upper_bound=0)
+    end
+    return variable
+end
 
 """
     relax!(gmp::GMPModel, order::Int, optimizer::OptimizerFactory)
 
-Computes the Lasserre relaxation.
+Computes the a relaxation of the generlized moment problem according to the certificates specified for each measure.
 """
 function relax!(gmp::GMPModel, order::Int, optimizer::OptimizerFactory)
-    	# construct dual
-	gmp.dual = SOSModel(optimizer)
+    # construct dual
+    gmp.dual = SOSModel(optimizer)
 
+    if gmp.objective === nothing
+        println("Please define an objective")
+        return
+    elseif gmp.objective.sense == MOI.MIN_SENSE
+        sossense = MOI.MAX_SENSE
+    else
+        sossense = MOI.MIN_SENSE
+    end
 
-	if typeof(gmp.objective) == EmptyObjective	
-		println("Please define an objective")
-		return
-	elseif gmp.objective.sense == MOI.MIN_SENSE
-		sossense = MOI.MAX_SENSE
-		sign1 =  1
-	else
-		sossense = MOI.MIN_SENSE
-		sign1 = -1
-	end
+    if isempty(gmp.constraints)
+        @error "Define at least one moment constraint!"
+    end
 
-	if isempty(gmp.constraints)
-		@error "Define at least one moment constraint!"
-	end
-	
     PT = polynomialtype(variabletype(first(gmp.measures)), JuMP.AffExpr)
-    drhs = Dict{Measure, PT}()
-	for meas in gmp.measures
-        drhs[meas] = zero(PT)
-	end
+    dlhs = Dict{Measure, PT}()
+    for meas in gmp.measures
+        dlhs[meas] = zero(PT)
+    end
 
-    for momcon in gmp.constraints
-        if momcon.mode ==:eq
-            gmp.dref[momcon] = @variable(gmp.dual)
-        elseif momcon.mode ==:leq
-            if gmp.objective.sense == MOI.MIN_SENSE
-                gmp.dref[momcon] = @variable(gmp.dual, upper_bound=0)
-            else
-                gmp.dref[momcon] = @variable(gmp.dual, lower_bound=0)
-            end
-        elseif momcon.mode ==:geq
-            if gmp.objective.sense == MOI.MIN_SENSE
-                gmp.dref[momcon] = @variable(gmp.dual, lower_bound=0) 
-            else
-                gmp.dref[momcon] = @variable(gmp.dual, upper_bound=0)
-            end
-        end
-        for meas in keys(momcon.lhs.momdict)
-            drhs[meas] = add_prod!(drhs[meas], momcon.lhs.momdict[meas], gmp.dref[momcon])
-            #drhs[meas] = drhs[meas] + gmp.dref[momcon]*momcon.lhs.momdict[meas]
+    gmp.dref = [dual_variable(gmp.dual, con, gmp.objective.sense) for con in gmp.constraints]
+
+    for (momcon, variable) in zip(gmp.constraints, gmp.dref)
+        for meas in measures(momcon)
+            dlhs[meas] = add_prod!(dlhs[meas], momcon.func.momdict[meas], variable)
         end
     end
 
-    # bookkeeping 
-	for meas in gmp.measures
-        p = drhs[meas]
+    for meas in gmp.measures
+        p = dlhs[meas]
         if sossense == MOI.MAX_SENSE
             p = -p
         end
@@ -101,15 +92,15 @@ function relax!(gmp::GMPModel, order::Int, optimizer::OptimizerFactory)
             if sossense == MOI.MIN_SENSE
                 obj = -obj
             end
-            # Modifies drhs[meas] but it's ok since it not used anywhere else
+            # Modifies dlhs[meas] but it's ok since it not used anywhere else
             p = add_prod!(p, obj)
         end
-	    gmp.cref[meas] = @constraint(gmp.dual, p in meas.cert, domain = meas.supp, maxdegree = 2*order)
-	end
+        gmp.cref[meas] = @constraint(gmp.dual, p in meas.cert, domain = meas.supp, maxdegree = 2*order)
+    end
 
-        @objective(gmp.dual,sossense, sum(gmp.dref[momcon]*momcon.rhs for momcon in gmp.constraints))
+    @objective(gmp.dual,sossense, sum(variable * constant(momcon) for (momcon, variable) in zip(gmp.constraints, gmp.dref)))
 
-	optimize!(gmp.dual)
+    optimize!(gmp.dual)
 
-	gmp.dstatus = termination_status(gmp.dual)
+    gmp.dstatus = termination_status(gmp.dual)
 end
